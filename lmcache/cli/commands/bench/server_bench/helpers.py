@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Internal helpers for ``lmcache bench server``.
+"""Internal MP server helpers for ``bench server`` and ``bench l1``.
 
 This module owns the heavy runtime imports (``torch`` / ``zmq`` /
 ``lmcache.v1.*``) and all pure / low-level helper functions used by
-the ``server`` bench target. The CLI registration and execute
-orchestration live in :mod:`lmcache.cli.commands.bench.server_bench.command`.
+the MP server-backed benchmarks. The sanity-test orchestration lives in
+:mod:`lmcache.cli.commands.bench.server_bench.command`; the L1 throughput
+runner reuses only the registration, key, lookup, and allocation primitives.
 
 Splitting the module this way keeps the public command surface in line
 with the ``engine_bench`` and ``l2_adapter_bench`` siblings, while
@@ -86,20 +87,25 @@ except ImportError as _exc:
         )
 
 
-def _require_full_install() -> None:
+def _require_full_install(
+    command_name: str = "lmcache bench server",
+) -> None:
     """Exit with an install hint if the full LMCache runtime is missing.
 
-    ``lmcache bench server`` needs torch, zmq and ``lmcache.v1.*``
+    MP server benchmarks need torch, zmq and ``lmcache.v1.*``
     (MP client, KV layer-group parser). When those imports failed at
     module load — almost always because the user installed
     ``lmcache-cli`` instead of the full package — print the shortest
     actionable message to stderr and exit with status ``2`` so
     scripts can detect the install gap programmatically.
+
+    Args:
+        command_name: CLI command to name in the actionable error message.
     """
     if _IMPORT_ERROR is None:
         return
     print(
-        "ERROR: `lmcache bench server` needs the full LMCache package "
+        f"ERROR: `{command_name}` needs the full LMCache package "
         "(torch, zmq, MP runtime), but only the `lmcache-cli` shell "
         "appears to be installed.\n"
         "  Install the full package with `pip install lmcache` and try "

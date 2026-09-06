@@ -1434,6 +1434,46 @@ def test_instance_id_logged_at_info_on_construction(fake_adapter, monkeypatch) -
     assert any(str(adapter.instance_id) in msg for msg in messages)
 
 
+def test_registration_starts_one_heartbeat_after_ack(
+    fake_adapter: tuple[LMCacheMPWorkerAdapter, MagicMock, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Successful registration starts one heartbeat before any transfer."""
+    adapter, _, _ = fake_adapter
+    context = MagicMock()
+    order: list[str] = []
+    context.register.side_effect = lambda *args, **kwargs: order.append("ack")
+    FakeHeartbeatThread.start_hook = lambda heartbeat: order.append("heartbeat")
+    monkeypatch.setattr(adapter_mod, "create_transfer_context", lambda *a, **k: context)
+    caches = {"layer.0": torch.empty(1)}
+
+    adapter.register_kv_caches(caches, layout_hints={})
+    adapter.register_kv_caches(caches, layout_hints={})
+
+    assert order == ["ack", "heartbeat", "ack"]
+    assert len(FakeHeartbeatThread.instances) == 1
+    assert FakeHeartbeatThread.instances[0].calls == [
+        "register_recover_callback",
+        "start",
+    ]
+
+
+def test_failed_registration_does_not_start_heartbeat(
+    fake_adapter: tuple[LMCacheMPWorkerAdapter, MagicMock, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing registration ACK must not start the worker heartbeat."""
+    adapter, _, _ = fake_adapter
+    context = MagicMock()
+    context.register.side_effect = TimeoutError("no registration ACK")
+    monkeypatch.setattr(adapter_mod, "create_transfer_context", lambda *a, **k: context)
+
+    with pytest.raises(ConnectionError, match="register_kv_caches"):
+        adapter.register_kv_caches({"layer.0": torch.empty(1)}, layout_hints={})
+
+    assert FakeHeartbeatThread.instances == []
+
+
 def test_heartbeat_lazy_start_wires_callback_before_start(fake_adapter) -> None:
     """The lazy create path starts the heartbeat healthy (no pessimistic
     clear) and wires the recover callback before ``start()``; the first

@@ -117,12 +117,20 @@ class KVEventModule(InstanceLivenessTarget):
             for stream, _ in list(self._kv_event_streams.values()):
                 stream.close()
 
-    def touch_instance(self, instance_id: int) -> None:
-        """Refresh an existing subscription's last-seen time on worker PING."""
+    def touch_instance(self, instance_id: int) -> bool:
+        """Refresh an existing subscription's last-seen time on worker PING.
+
+        Args:
+            instance_id: Worker whose event subscription should be refreshed.
+
+        Returns:
+            False because subscriptions do not own KV registrations.
+        """
         with self._kv_event_lock:
             if instance_id in self._kv_event_streams:
                 stream, _ = self._kv_event_streams[instance_id]
                 self._kv_event_streams[instance_id] = (stream, time.monotonic())
+        return False
 
     def reap_stale_instances(
         self, reap_timeout_s: float, registration_grace_s: float

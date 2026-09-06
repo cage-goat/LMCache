@@ -1516,10 +1516,7 @@ class LMCacheMPWorkerAdapter:
         self._health_event = threading.Event()
         self._health_event.set()
 
-        # Heartbeat thread is created but NOT started yet.
-        # It will be lazily started on the first store or retrieve
-        # request, by which time vLLM is fully ready (model loaded,
-        # KV caches allocated, warmup & CUDA graph capture done).
+        # Start only after KV registration, before the first request.
         self._heartbeat_interval = heartbeat_interval
         self._heartbeat: HeartbeatThread | None = None
         self._heartbeat_lock = threading.Lock()
@@ -1597,6 +1594,9 @@ class LMCacheMPWorkerAdapter:
         """
         Register the kv caches with LMCache server.
 
+        Start the worker heartbeat once after successful registration, even
+        when no store or retrieve request has arrived yet.
+
         Args:
             kv_caches: A dict of kv caches to register. The keys are the
                 layer names and the values are the corresponding tensors.
@@ -1629,6 +1629,7 @@ class LMCacheMPWorkerAdapter:
             layout_hints if layout_hints is not None else vllm_layout_hints()
         )
         self._send_register_kv_caches_request(kv_caches)
+        self._ensure_heartbeat_started()
 
     def _block_ids_per_group(self, op: LoadStoreOp) -> list[list[int]]:
         return expand_engine_block_ids(self.engine_group_infos, op.block_ids)
@@ -1680,14 +1681,14 @@ class LMCacheMPWorkerAdapter:
             ) from None
 
     def _ensure_heartbeat_started(self) -> None:
-        """Lazily start the heartbeat on first store, retrieve, or event poll.
+        """Start the heartbeat thread once after KV cache registration.
 
         The heartbeat starts healthy (the event was set at construction). A
         live worker pings every interval, refreshing its server-side
-        ``last_seen``, so it is never reaped while alive -- no re-registration
-        is needed at startup, and the first store/retrieve is not gated. The
-        recover callback still re-registers on a genuine unhealthy->healthy
-        edge (server restart).
+        ``last_seen``, so an idle registered worker is not reaped before its
+        first request. Store/retrieve and event-poll paths also call this method
+        defensively; the idempotent guard prevents duplicate threads. The recover
+        callback re-registers on an unhealthy-to-healthy heartbeat transition.
         """
         if self._heartbeat is not None:
             return
